@@ -13,10 +13,18 @@
       "localizedDescription": "Personal build of official Aidoku releases, built with com.zhelearn.Aidoku bundle identifier.",
       "iconURL": "https://aidoku.app/images/apple-touch-icon.png",
       "tintColor": "ff375f",
-      "versions": [],
-      "version": "0.0.0",
-      "versionDate": "",
-      "downloadURL": ""
+      "versions": [
+        {
+          "version": "0.9",
+          "date": "2026-09-03T20:17:08Z",
+          "downloadURL": "https://github.com/zHElEARN/aidoku-builds/releases/download/v0.9-personal/Aidoku_personal.ipa",
+          "size": 11652494,
+          "buildVersion": "3"
+        }
+      ],
+      "version": "0.9",
+      "versionDate": "2026-09-03T20:17:08Z",
+      "downloadURL": "https://github.com/zHElEARN/aidoku-builds/releases/download/v0.9-personal/Aidoku_personal.ipa"
     }
   ],
   "news": []
