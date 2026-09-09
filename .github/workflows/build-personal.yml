@@ -38,7 +38,7 @@ jobs:
         id: check
         run: |
           TAG="${{ steps.release.outputs.tag }}"
-          FORCE="${{ inputs.force == 'true' }}"
+          FORCE="${{ github.event.inputs.force == 'true' }}"
           LAST="$(cat last-built-tag 2>/dev/null || true)"
           if [ "${FORCE}" = "true" ] || [ "${LAST}" != "${TAG}" ]; then
             echo "build=true" >> "${GITHUB_OUTPUT}"
