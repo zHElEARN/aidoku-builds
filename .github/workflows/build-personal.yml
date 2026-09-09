@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - name: Checkout own repository
         uses: actions/checkout@v4
@@ -48,15 +48,17 @@ jobs:
             echo "No new release: ${TAG} already built"
           fi
 
-      - name: Select Xcode
+      - name: Set up Xcode
+        if: steps.check.outputs.build == 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.6"
+
+      - name: Prepare iOS platform
         if: steps.check.outputs.build == 'true'
         run: |
-          if [ -d /Applications/Xcode_26.3.0.app ]; then
-            XCODE="/Applications/Xcode_26.3.0.app"
-          else
-            XCODE="$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort -V | tail -1)"
-          fi
-          sudo xcode-select -s "${XCODE}"
+          xcrun simctl list > /dev/null
+          xcodebuild -downloadPlatform iOS
 
       - name: Checkout Aidoku source
         if: steps.check.outputs.build == 'true'
@@ -87,7 +89,7 @@ jobs:
                   stripped.startswith("OTHER_SWIFT_FLAGS")
                   and "CANONICAL_BUILD" in stripped
               ):
-                  lines[i] = "# " + line
+                  lines[i] = "// " + line
                   flag_found = True
 
           if not prefix_found:
