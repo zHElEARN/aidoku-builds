@@ -79,23 +79,14 @@ jobs:
 
           lines = text.splitlines(keepends=True)
           prefix_found = False
-          flag_found = False
           for i, line in enumerate(lines):
               stripped = line.strip()
               if stripped.startswith("APP_ID_PREFIX") and "app.aidoku" in stripped:
                   lines[i] = line.replace("app.aidoku", "com.zhelearn", 1)
                   prefix_found = True
-              elif (
-                  stripped.startswith("OTHER_SWIFT_FLAGS")
-                  and "CANONICAL_BUILD" in stripped
-              ):
-                  lines[i] = "// " + line
-                  flag_found = True
 
           if not prefix_found:
               raise SystemExit("config patch failed: APP_ID_PREFIX line not found")
-          if not flag_found:
-              raise SystemExit("config patch failed: CANONICAL_BUILD flag line not found")
 
           text = "".join(lines)
           p.write_text(text)
