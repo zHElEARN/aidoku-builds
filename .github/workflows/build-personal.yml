@@ -1,0 +1,180 @@
+name: Build Aidoku (Personal) from official Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if this official release was already built
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-aidoku-personal
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout own repository
+        uses: actions/checkout@v4
+
+      - name: Get latest official Aidoku release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(gh api repos/Aidoku/Aidoku/releases/latest --jq '.tag_name')"
+          DATE="$(gh api repos/Aidoku/Aidoku/releases/latest --jq '.published_at')"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "date=${DATE}" >> "${GITHUB_OUTPUT}"
+          echo "Latest official release: ${TAG} (${DATE})"
+
+      - name: Check whether this release was already built
+        id: check
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          FORCE="${{ inputs.force == 'true' }}"
+          LAST="$(cat last-built-tag 2>/dev/null || true)"
+          if [ "${FORCE}" = "true" ] || [ "${LAST}" != "${TAG}" ]; then
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+            echo "Building ${TAG} (last built: ${LAST:-none})"
+          else
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+            echo "No new release: ${TAG} already built"
+          fi
+
+      - name: Select Xcode
+        if: steps.check.outputs.build == 'true'
+        run: |
+          if [ -d /Applications/Xcode_26.3.0.app ]; then
+            XCODE="/Applications/Xcode_26.3.0.app"
+          else
+            XCODE="$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort -V | tail -1)"
+          fi
+          sudo xcode-select -s "${XCODE}"
+
+      - name: Checkout Aidoku source
+        if: steps.check.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Aidoku/Aidoku
+          ref: ${{ steps.release.outputs.tag }}
+          path: aidoku
+          fetch-depth: 1
+
+      - name: Apply personal bundle identifier config
+        if: steps.check.outputs.build == 'true'
+        run: |
+          python3 - <<'EOF'
+          import pathlib
+          p = pathlib.Path("aidoku/Aidoku/Aidoku.xcconfig")
+          text = p.read_text()
+
+          old_prefix = "APP_ID_PREFIX = app.aidoku"
+          new_prefix = "APP_ID_PREFIX = com.zhelearn"
+          if old_prefix not in text:
+              raise SystemExit("config patch failed: APP_ID_PREFIX line not found")
+          text = text.replace(old_prefix, new_prefix)
+
+          old_flag = "OTHER_SWIFT_FLAGS = $(inherited) -DCANONICAL_BUILD"
+          if old_flag not in text:
+              raise SystemExit("config patch failed: CANONICAL_BUILD flag line not found")
+          text = text.replace(
+              old_flag,
+              "# OTHER_SWIFT_FLAGS = $(inherited) -DCANONICAL_BUILD (disabled for personal builds)"
+          )
+
+          p.write_text(text)
+          print("personal config applied")
+          EOF
+
+      - name: Build Aidoku IPA (unsigned)
+        if: steps.check.outputs.build == 'true'
+        working-directory: aidoku
+        run: |
+          xcodebuild -scheme "Aidoku" -configuration Release archive \
+            -archivePath build/Aidoku.xcarchive \
+            -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          mkdir -p Payload
+          cp -R build/Aidoku.xcarchive/Products/Applications/Aidoku.app Payload/
+          zip -qry -9 Aidoku_personal.ipa Payload
+
+      - name: Verify personal build
+        if: steps.check.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          APP="aidoku/build/Aidoku.xcarchive/Products/Applications/Aidoku.app"
+          BIN="${APP}/Aidoku"
+          test -x "${BIN}"
+          test -s "aidoku/Aidoku_personal.ipa"
+
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${APP}/Info.plist")"
+          CONTAINER_ID="$(/usr/libexec/PlistBuddy -c 'Print ICLOUD_CONTAINER_ID' "${APP}/Info.plist")"
+          test "${BUNDLE_ID}" = "com.zhelearn.Aidoku"
+          test "${CONTAINER_ID}" = "iCloud.com.zhelearn.Aidoku"
+          echo "Verify OK: ${BUNDLE_ID} / ${CONTAINER_ID}"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.build == 'true'
+        id: create_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          RELEASE_TAG="${TAG}-personal"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release delete "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+          fi
+          gh release create "${RELEASE_TAG}" aidoku/Aidoku_personal.ipa \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Aidoku ${TAG} (Personal)" \
+            --notes "Personal build of official Aidoku ${TAG} with com.zhelearn.Aidoku identifier. Sign with your own certificate."
+          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Update app-repo.json
+        if: steps.check.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${TAG#v}"
+          DATE="${{ steps.release.outputs.date }}"
+          RELEASE_TAG="${{ steps.create_release.outputs.release_tag }}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Aidoku_personal.ipa"
+          SIZE="$(stat -f%z aidoku/Aidoku_personal.ipa)"
+          APP="aidoku/build/Aidoku.xcarchive/Products/Applications/Aidoku.app"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "${APP}/Info.plist")"
+
+          jq --arg version "${VERSION}" \
+             --arg date "${DATE}" \
+             --arg url "${URL}" \
+             --arg build "${BUILD}" \
+             --argjson size "${SIZE}" '
+            .apps[0].version = $version |
+            .apps[0].versionDate = $date |
+            .apps[0].downloadURL = $url |
+            .apps[0].versions = ([{version: $version, date: $date, downloadURL: $url, size: $size, buildVersion: $build}] + (.apps[0].versions // []))
+          ' app-repo.json > app-repo.json.tmp
+          mv app-repo.json.tmp app-repo.json
+          jq empty app-repo.json
+
+      - name: Commit updated source and marker
+        if: steps.check.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          echo "${TAG}" > last-built-tag
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app-repo.json last-built-tag
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: build Aidoku ${TAG} (personal)"
+            git push origin HEAD:main
+          fi

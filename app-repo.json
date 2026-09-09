@@ -1,0 +1,23 @@
+{
+  "name": "Aidoku Personal Builds",
+  "identifier": "com.zhelearn.aidoku-builds",
+  "subtitle": "Personal Aidoku builds with com.zhelearn.Aidoku identifier",
+  "description": "Personal builds of official Aidoku releases. Sign them with your own certificate.",
+  "website": "https://github.com/zHElEARN/aidoku-builds",
+  "apps": [
+    {
+      "name": "Aidoku (Personal)",
+      "bundleIdentifier": "com.zhelearn.Aidoku",
+      "developerName": "Aidoku",
+      "subtitle": "Personal Aidoku build",
+      "localizedDescription": "Personal build of official Aidoku releases, built with com.zhelearn.Aidoku bundle identifier.",
+      "iconURL": "https://aidoku.app/images/apple-touch-icon.png",
+      "tintColor": "ff375f",
+      "versions": [],
+      "version": "0.0.0",
+      "versionDate": "",
+      "downloadURL": ""
+    }
+  ],
+  "news": []
+}
