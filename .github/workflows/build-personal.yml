@@ -75,20 +75,27 @@ jobs:
           p = pathlib.Path("aidoku/Aidoku/Aidoku.xcconfig")
           text = p.read_text()
 
-          old_prefix = "APP_ID_PREFIX = app.aidoku"
-          new_prefix = "APP_ID_PREFIX = com.zhelearn"
-          if old_prefix not in text:
+          lines = text.splitlines(keepends=True)
+          prefix_found = False
+          flag_found = False
+          for i, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped.startswith("APP_ID_PREFIX") and "app.aidoku" in stripped:
+                  lines[i] = line.replace("app.aidoku", "com.zhelearn", 1)
+                  prefix_found = True
+              elif (
+                  stripped.startswith("OTHER_SWIFT_FLAGS")
+                  and "CANONICAL_BUILD" in stripped
+              ):
+                  lines[i] = "# " + line
+                  flag_found = True
+
+          if not prefix_found:
               raise SystemExit("config patch failed: APP_ID_PREFIX line not found")
-          text = text.replace(old_prefix, new_prefix)
-
-          old_flag = "OTHER_SWIFT_FLAGS = $(inherited) -DCANONICAL_BUILD"
-          if old_flag not in text:
+          if not flag_found:
               raise SystemExit("config patch failed: CANONICAL_BUILD flag line not found")
-          text = text.replace(
-              old_flag,
-              "# OTHER_SWIFT_FLAGS = $(inherited) -DCANONICAL_BUILD (disabled for personal builds)"
-          )
 
+          text = "".join(lines)
           p.write_text(text)
           print("personal config applied")
           EOF
