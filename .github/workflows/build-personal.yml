@@ -20,10 +20,15 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-26
+    # Upstream Aidoku switched its own CI to the `xcode-27` image when the app
+    # started using iOS 27-only APIs (v0.9-4+). Pinning an older Xcode
+    # (26.6 / iOS 26.5 SDK) fails to compile those sources, so match upstream.
+    # The image ships the required iOS platform; no setup-xcode / downloadPlatform needed.
+    runs-on: xcode-27
+    timeout-minutes: 90
     steps:
       - name: Checkout own repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Get latest official Aidoku release
         id: release
@@ -50,21 +55,15 @@ jobs:
             echo "No new release: ${TAG} already built"
           fi
 
-      - name: Set up Xcode
-        if: steps.check.outputs.build == 'true'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.6"
-
-      - name: Prepare iOS platform
+      - name: Show toolchain
         if: steps.check.outputs.build == 'true'
         run: |
-          xcrun simctl list > /dev/null
-          xcodebuild -downloadPlatform iOS
+          xcodebuild -version
+          echo "iPhoneOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
 
       - name: Checkout Aidoku source
         if: steps.check.outputs.build == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Aidoku/Aidoku
           ref: ${{ steps.release.outputs.tag }}
@@ -99,6 +98,7 @@ jobs:
         if: steps.check.outputs.build == 'true'
         working-directory: aidoku
         run: |
+          set -euo pipefail
           xcodebuild -scheme "Aidoku" -configuration Release archive \
             -archivePath build/Aidoku.xcarchive \
             -skipPackagePluginValidation \
@@ -108,6 +108,7 @@ jobs:
           zip -qry -9 Aidoku_personal.ipa Payload
 
       - name: Verify personal build
+        id: verify
         if: steps.check.outputs.build == 'true'
         run: |
           set -euo pipefail
@@ -120,7 +121,16 @@ jobs:
           CONTAINER_ID="$(/usr/libexec/PlistBuddy -c 'Print ICLOUD_CONTAINER_ID' "${APP}/Info.plist")"
           test "${BUNDLE_ID}" = "com.zhelearn.Aidoku"
           test "${CONTAINER_ID}" = "iCloud.com.zhelearn.Aidoku"
-          echo "Verify OK: ${BUNDLE_ID} / ${CONTAINER_ID}"
+
+          # Version numbers come from the built binary, not from the git tag:
+          # tags like v0.9-4 are not valid semver and make AltStore mis-order updates.
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${APP}/Info.plist")"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "${APP}/Info.plist")"
+          test -n "${VERSION}"
+          test -n "${BUILD}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "build=${BUILD}" >> "${GITHUB_OUTPUT}"
+          echo "Verify OK: ${BUNDLE_ID} / ${CONTAINER_ID} / ${VERSION} (${BUILD})"
 
       - name: Create GitHub Release
         if: steps.check.outputs.build == 'true'
@@ -129,28 +139,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.verify.outputs.version }}"
+          BUILD="${{ steps.verify.outputs.build }}"
           RELEASE_TAG="${TAG}-personal"
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release delete "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
           fi
           gh release create "${RELEASE_TAG}" aidoku/Aidoku_personal.ipa \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Aidoku ${TAG} (Personal)" \
-            --notes "Personal build of official Aidoku ${TAG} with com.zhelearn.Aidoku identifier. Sign with your own certificate."
+            --title "Aidoku ${VERSION} (${BUILD}) (Personal)" \
+            --notes "Personal build of official Aidoku ${TAG} (CFBundleShortVersionString ${VERSION}, CFBundleVersion ${BUILD}) with com.zhelearn.Aidoku identifier. Sign with your own certificate."
           echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
 
       - name: Update app-repo.json
         if: steps.check.outputs.build == 'true'
         run: |
           set -euo pipefail
-          TAG="${{ steps.release.outputs.tag }}"
-          VERSION="${TAG#v}"
+          VERSION="${{ steps.verify.outputs.version }}"
+          BUILD="${{ steps.verify.outputs.build }}"
           DATE="${{ steps.release.outputs.date }}"
           RELEASE_TAG="${{ steps.create_release.outputs.release_tag }}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Aidoku_personal.ipa"
           SIZE="$(stat -f%z aidoku/Aidoku_personal.ipa)"
-          APP="aidoku/build/Aidoku.xcarchive/Products/Applications/Aidoku.app"
-          BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "${APP}/Info.plist")"
 
           jq --arg version "${VERSION}" \
              --arg date "${DATE}" \
@@ -160,7 +170,16 @@ jobs:
             .apps[0].version = $version |
             .apps[0].versionDate = $date |
             .apps[0].downloadURL = $url |
-            .apps[0].versions = ([{version: $version, date: $date, downloadURL: $url, size: $size, buildVersion: $build}] + (.apps[0].versions // []))
+            .apps[0].buildVersion = $build |
+            .apps[0].size = $size |
+            .apps[0].versions = ([{
+                version: $version,
+                date: $date,
+                downloadURL: $url,
+                size: $size,
+                buildVersion: $build
+              }] + ([.apps[0].versions[]? | select(.version != $version or ((.buildVersion // "") != $build))])) |
+            .apps[0].versions |= .[0:20]
           ' app-repo.json > app-repo.json.tmp
           mv app-repo.json.tmp app-repo.json
           jq empty app-repo.json
